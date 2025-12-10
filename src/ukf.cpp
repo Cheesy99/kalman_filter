@@ -197,8 +197,40 @@ double UKF::normalizeAngle(double angle) {
 void UKF::predict(double dt, double dx, double dy, double dtheta) {
     // STUDENT IMPLEMENTATION STARTS HERE
     // ========================================================================
+     
+    auto sigma_points = generateSigmaPoints(x_, P_);
+    int n_sig = static_cast<int>(sigma_points.size());
+    std::vector<Eigen::VectorXd> sigma_points_pred;
+
+    Eigen::VectorXd x_pred = Eigen::VectorXd::Zero(nx_);
+    Eigen::MatrixXd P_pred = Eigen::MatrixXd::Zero(nx_, nx_);
+
+   
+    double cos_sum = 0.0;
+    double sin_sum = 0.0;
+    sigma_points_pred.resize(sigma_points.size());
+
+    for (int i = 0; i < n_sig; i++) {
+        sigma_points_pred[i] = processModel(sigma_points[i], dt, dx, dy, dtheta);
     
-    std::cout << "UKF Predict: TODO - Implement prediction step" << std::endl;
+        x_pred += Wm_[i] * sigma_points_pred[i];
+
+        double theta_p = sigma_points_pred[i](2); 
+        cos_sum += Wm_[i] * std::cos(theta_p);
+        sin_sum += Wm_[i] * std::sin(theta_p);
+
+        Eigen::VectorXd diff = sigma_points_pred[i] - x_pred;
+        diff(2) = normalizeAngle(diff(2));
+        P_pred += Wc_[i] * diff * diff.transpose();
+    }
+    
+    x_pred(2) = std::atan2(sin_sum, cos_sum);
+
+    P_pred += Q_;
+    x_ = x_pred;
+    P_ = P_pred;
+
+    std::cout << "UKF Predict: " << std::endl;
 }
 
 // ============================================================================
@@ -225,6 +257,58 @@ void UKF::update(const std::vector<std::tuple<int, double, double, double>>& lan
     // STUDENT IMPLEMENTATION STARTS HERE
     // ========================================================================
     
+     // Process each landmark observation sequentially
+     for (const auto& obs : landmark_observations) {
+        auto [id, meas_x, meas_y, extra] = obs;
+
+        // 1) Generate sigma points from current state and covariance
+        auto sigma_points = generateSigmaPoints(x_, P_);
+        int n_sig = static_cast<int>(sigma_points.size());
+
+        // 2) Transform sigma points through measurement model
+        std::vector<Eigen::Vector2d> Z_sigma(n_sig);
+        Eigen::Vector2d z_pred = Eigen::Vector2d::Zero();
+
+        for (int i = 0; i < n_sig; ++i) {
+            Z_sigma[i] = measurementModel(sigma_points[i], id);
+            z_pred += Wm_[i] * Z_sigma[i];  // predicted measurement mean
+        }
+
+        // 3) Measurement covariance S and cross-covariance Tc
+        Eigen::Matrix2d S = Eigen::Matrix2d::Zero();
+        Eigen::MatrixXd Tc = Eigen::MatrixXd::Zero(nx_, nz_);  // nx_ x 2
+
+        for (int i = 0; i < n_sig; ++i) {
+            Eigen::Vector2d z_diff = Z_sigma[i] - z_pred;
+
+            Eigen::VectorXd x_diff = sigma_points[i] - x_;
+            x_diff(2) = normalizeAngle(x_diff(2));  // handle angle in state
+
+            S  += Wc_[i] * z_diff * z_diff.transpose();
+            Tc += Wc_[i] * x_diff * z_diff.transpose();
+        }
+
+        // Add measurement noise
+        S += R_;
+
+        // 4) Kalman gain
+        Eigen::MatrixXd K = Tc * S.inverse();  // (nx_ x 2)
+
+        // 5) Innovation (measurement - predicted measurement)
+        Eigen::Vector2d z_meas;
+        z_meas << meas_x, meas_y;
+
+        Eigen::Vector2d y = z_meas - z_pred;
+
+        // 6) State update
+        x_ = x_ + K * y;
+        x_(2) = normalizeAngle(x_(2));  // keep theta in a sane range
+
+        // 7) Covariance update
+        P_ = P_ - K * S * K.transpose();
+    }
+  
+
     std::cout << "UKF Update: TODO - Implement measurement update step" << std::endl;
 }
 
