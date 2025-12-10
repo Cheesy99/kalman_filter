@@ -149,8 +149,25 @@ Eigen::Vector2d UKF::measurementModel(const Eigen::VectorXd& state, int landmark
     if (landmarks_.find(landmark_id) == landmarks_.end()) {
         return Eigen::Vector2d::Zero();
     }
-    
-    return Eigen::Vector2d::Zero();
+
+    std::pair<double, double> landmark = landmarks_.at(landmark_id);
+    double delta_x = landmark.first - state(0); 
+    double delta_y = landmark.second - state(1);
+
+    Eigen::Vector2d result(delta_x, delta_y);
+  
+    double theta = normalizeAngle(state(2));
+
+    Eigen::Matrix2d rotationMatrix;
+    rotationMatrix(0,0) = std::cos(theta);
+    rotationMatrix(0,1) = - std::sin(theta);
+    rotationMatrix(1,0) = std::sin(theta);
+    rotationMatrix(1,1) = std::cos(theta);
+
+    result = rotationMatrix.transpose() * result;
+  
+
+    return result;
 }
 
 // ============================================================================
