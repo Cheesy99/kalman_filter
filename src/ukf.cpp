@@ -33,8 +33,36 @@ UKF::UKF(double process_noise_xy, double process_noise_theta,
     
     // STUDENT IMPLEMENTATION STARTS HERE
     // ========================================================================
-    
-    std::cout << "UKF Constructor: TODO - Implement filter initialization" << std::endl;
+        this->lambda_ = ALPHA * ALPHA * (nx_ + KAPPA) - nx_;
+        this->gamma_ = std::sqrt(nx_ + lambda_);
+        this->x_ = Eigen::VectorXd::Zero(nx_);
+        this->P_ = Eigen::MatrixXd::Identity(nx_, nx_);
+
+        this->Q_ = Eigen::MatrixXd::Zero(nx_, nx_);
+        this->Q_(0,0) = process_noise_xy;
+        this->Q_(1,1) = process_noise_xy;
+        this->Q_(2,2) = process_noise_theta;
+
+        this->R_ = measurement_noise_xy * Eigen::MatrixXd::Identity(nz_, nz_);
+
+        // ============================================================================
+        // TODO: Really understand the math below why we use these values hwo the work
+        // ============================================================================
+        int numberOfSigmaPoints = 2 * nx_ + 1;
+        this->Wm_.resize(numberOfSigmaPoints);
+        this->Wc_.resize(numberOfSigmaPoints);
+       
+        double c   = nx_ + lambda_;
+
+        Wm_[0] = lambda_ / c;
+        Wc_[0] = lambda_ / c + (1.0 - ALPHA * ALPHA + BETA);
+
+        double wi = 1.0 / (2.0 * c);
+
+        for(int i = 1; i < numberOfSigmaPoints; ++i){
+            Wm_[i] = wi;
+            Wc_[i] = wi;
+        }
 }
 
 // ============================================================================
@@ -54,7 +82,19 @@ std::vector<Eigen::VectorXd> UKF::generateSigmaPoints(const Eigen::VectorXd& mea
     // STUDENT IMPLEMENTATION STARTS HERE
     // ========================================================================
     
+
     std::vector<Eigen::VectorXd> sigma_points;
+    sigma_points.resize(2 * mean.size() + 1);
+    sigma_points[0] = mean;
+                                         
+    for(int i = 0; i < mean.size() - 1; i++) {
+        int k_pos = 1 + i;
+        int k_neg = 1 + i + mean.size();
+    
+            sigma_points[k_pos] = mean + cov.col(i - 1);
+            sigma_points[k_neg] = mean - cov.col(i - 1);
+       
+    }
     
     return sigma_points;
 }
