@@ -84,15 +84,18 @@ std::vector<Eigen::VectorXd> UKF::generateSigmaPoints(const Eigen::VectorXd& mea
     
 
     std::vector<Eigen::VectorXd> sigma_points;
-    sigma_points.resize(2 * mean.size() + 1);
+    sigma_points.resize(2 * nx_ + 1);
     sigma_points[0] = mean;
-                                         
-    for(int i = 0; i < mean.size() - 1; i++) {
+    Eigen::LLT<Eigen::MatrixXd> llt(cov);
+    Eigen::MatrixXd L = llt.matrixL();
+    Eigen::MatrixXd s = gamma_ * L; 
+
+    for(int i = 0; i < nx_; i++) {
         int k_pos = 1 + i;
-        int k_neg = 1 + i + mean.size();
-    
-            sigma_points[k_pos] = mean + cov.col(i - 1);
-            sigma_points[k_neg] = mean - cov.col(i - 1);
+        int k_neg = 1 + i + nx_;
+      
+        sigma_points[k_pos] = mean + s.col(i);
+        sigma_points[k_neg] = mean - s.col(i);
        
     }
     
@@ -114,10 +117,16 @@ std::vector<Eigen::VectorXd> UKF::generateSigmaPoints(const Eigen::VectorXd& mea
 Eigen::VectorXd UKF::processModel(const Eigen::VectorXd& state, double dt,
                                   double dx, double dy, double dtheta) {
     // STUDENT IMPLEMENTATION STARTS HERE
-    // ========================================================================
-    
+    // =======================================================================
     Eigen::VectorXd new_state = state;
-    
+    new_state(0) = new_state(0) + dx;
+    new_state(1) = new_state(1) + dy;
+    new_state(2) =  this->normalizeAngle(new_state(2) + dtheta);
+    if(dt != 0) {
+        new_state(3) = dx/dt;
+        new_state(4) = dy/dt;
+    }
+ 
     return new_state;
 }
 
