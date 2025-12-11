@@ -5,6 +5,9 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "kalman_positioning/ukf.hpp"
+#include "kalman_positioning/landmark_manager.hpp"
+
 
 #include <memory>
 #include <cmath>
@@ -50,6 +53,44 @@ public:
         RCLCPP_INFO(this->get_logger(), "Publishing to /robot_estimated_odometry");
         
         RCLCPP_INFO(this->get_logger(), "Kalman Positioning Node initialized successfully");
+
+        this->declare_parameter<std::string>("landmarks_csv_path", "");
+        this->declare_parameter<double>("process_noise_xy", 1e-4);
+        this->declare_parameter<double>("process_noise_theta", 1e-4);
+        this->declare_parameter<double>("measurement_noise_xy", 0.01);
+        this->declare_parameter<double>("observation_radius", 5.0);
+
+        std::string landmarks_csv =
+            this->get_parameter("landmarks_csv_path").as_string();
+        double process_noise_xy =
+            this->get_parameter("process_noise_xy").as_double();
+        double process_noise_theta =
+            this->get_parameter("process_noise_theta").as_double();
+        double measurement_noise_xy =
+            this->get_parameter("measurement_noise_xy").as_double();
+        observation_radius_ =
+            this->get_parameter("observation_radius").as_double();
+            if (!landmark_manager_.loadFromCSV(landmarks_csv)) {
+                RCLCPP_ERROR(this->get_logger(),
+                             "Failed to load landmarks from CSV: %s",
+                             landmarks_csv.c_str());
+            } else {
+                RCLCPP_INFO(this->get_logger(),
+                            "Loaded %zu landmarks from %s",
+                            landmark_manager_.getLandmarks().size(),
+                            landmarks_csv.c_str());
+            }
+    
+            // Construct UKF with process / measurement noise
+            ukf_ = std::make_unique<UKF>(
+                process_noise_xy,
+                process_noise_theta,
+                measurement_noise_xy,
+                static_cast<int>(landmark_manager_.getLandmarks().size())
+            );
+    
+            // Give UKF the landmark map
+            ukf_->setLandmarks(landmark_manager_.getLandmarks());
     }
 
 private:
@@ -77,6 +118,15 @@ private:
     // ============================================================================
     // CALLBACK FUNCTIONS
     // ============================================================================
+
+    std::unique_ptr<UKF> ukf_;
+    LandmarkManager landmark_manager_;
+
+    rclcpp::Time last_odom_time_;
+    bool first_odom_ = true;
+
+    // maybe cache params if you want
+    double observation_radius_;
     
     /**
      * @brief Callback for noisy odometry measurements
@@ -94,20 +144,39 @@ private:
         // STUDENT ASSIGNMENT STARTS HERE
         // ========================================================================
         
-        // Placeholder: Extract and log the data
-        double x = msg->pose.pose.position.x;
-        double y = msg->pose.pose.position.y;
-        double theta = quaternionToYaw(msg->pose.pose.orientation);
+        if (!ukf_) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(),
+                                 2000, "UKF not initialized yet");
+            return;
+        }
+    
+        rclcpp::Time current_time(msg->header.stamp);
+    
+        // First message: init timestamp only
+        if (first_odom_) {
+            last_odom_time_ = current_time;
+            first_odom_ = false;
+            return;
+        }
+    
+        double dt = (current_time - last_odom_time_).seconds();
+        last_odom_time_ = current_time;
+    
+        if (dt <= 0.0) {
+            return;
+        }
+    
         double vx = msg->twist.twist.linear.x;
         double vy = msg->twist.twist.linear.y;
-        
-        RCLCPP_DEBUG(this->get_logger(), 
-            "Parsed: x=%.3f, y=%.3f, theta=%.3f, vx=%.3f, vy=%.3f",
-            x, y, theta, vx, vy);
-        
-        // For now, publish the noisy odometry as estimated
-        // Students should replace this with actual filter output
-        publishEstimatedOdometry(msg->header.stamp, *msg);
+        double wz = msg->twist.twist.angular.z;
+    
+        double dx = vx * dt;
+        double dy = vy * dt;
+        double dtheta = wz * dt;
+    
+        ukf_->predict(dt, dx, dy, dtheta);
+    
+        publishEstimatedOdometry(msg->header.stamp);
     }
     
     /**
@@ -119,33 +188,48 @@ private:
      * 3. Optionally publish the updated estimated odometry
      */
     void landmarksObservedCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        // STUDENT ASSIGNMENT STARTS HERE
-        // ========================================================================
-        
+        if (!ukf_) {
+            return;
+        }
+    
         RCLCPP_DEBUG(this->get_logger(), 
-            "Landmark observation received with %lu points", msg->width);
-        
-        // Placeholder: Parse and log the observations
+            "Landmark observation received with %u points", msg->width);
+    
+        // Vector of: (id, meas_x, meas_y, extra)
+        std::vector<std::tuple<int, double, double, double>> observations;
+    
         try {
-            sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x");
-            sensor_msgs::PointCloud2ConstIterator<float> iter_y(*msg, "y");
+            sensor_msgs::PointCloud2ConstIterator<float>    iter_x(*msg, "x");
+            sensor_msgs::PointCloud2ConstIterator<float>    iter_y(*msg, "y");
             sensor_msgs::PointCloud2ConstIterator<uint32_t> iter_id(*msg, "id");
             
-            int count = 0;
             for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_id) {
-                int landmark_id = static_cast<int>(*iter_id);
-                float obs_x = static_cast<float>(*iter_x);
-                float obs_y = static_cast<float>(*iter_y);
-                
+                int    landmark_id = static_cast<int>(*iter_id);
+                double obs_x       = static_cast<double>(*iter_x);
+                double obs_y       = static_cast<double>(*iter_y);
+    
+                // (Optional) use observation_radius_ to filter
+                // double dx = obs_x - ukf_->getState()(0);
+                // double dy = obs_y - ukf_->getState()(1);
+                // double dist = std::sqrt(dx*dx + dy*dy);
+                // if (dist > observation_radius_) continue;
+    
+                observations.emplace_back(landmark_id, obs_x, obs_y, 0.0);
+    
                 RCLCPP_DEBUG(this->get_logger(),
                     "Landmark %d observed at (%.3f, %.3f)",
                     landmark_id, obs_x, obs_y);
-                
-                count++;
             }
-            
+    
+            if (!observations.empty()) {
+                ukf_->update(observations);
+                // publish updated filter state
+                publishEstimatedOdometry(msg->header.stamp);
+            }
+    
             RCLCPP_DEBUG(this->get_logger(), 
-                "Processed %d landmark observations", count);
+                "Processed %zu landmark observations", observations.size());
+    
         } catch (const std::exception& e) {
             RCLCPP_WARN(this->get_logger(), 
                 "Failed to parse landmark observations: %s", e.what());
@@ -184,19 +268,34 @@ private:
      * @param timestamp Message timestamp
      * @param odom_msg Odometry message to publish
      */
-    void publishEstimatedOdometry(const rclcpp::Time& timestamp, 
-                                  const nav_msgs::msg::Odometry& odom_msg) {
-        nav_msgs::msg::Odometry estimated_odom = odom_msg;
+    void publishEstimatedOdometry(const rclcpp::Time& timestamp) {
+        if (!ukf_) {
+            return;
+        }
+    
+        nav_msgs::msg::Odometry estimated_odom;
         estimated_odom.header.stamp = timestamp;
         estimated_odom.header.frame_id = "map";
         estimated_odom.child_frame_id = "robot_estimated";
-        
-        // STUDENT TODO: Replace this with actual filter output
-        // Set position, orientation, velocity, and covariance from your Kalman filter
-        // Currently using placeholder values (noisy odometry)
-        
+    
+        const Eigen::VectorXd &x = ukf_->getState(); 
+    
+        estimated_odom.pose.pose.position.x = x(0);
+        estimated_odom.pose.pose.position.y = x(1);
+        estimated_odom.pose.pose.position.z = 0.0;
+    
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, x(2));
+        estimated_odom.pose.pose.orientation = tf2::toMsg(q);
+    
+        estimated_odom.twist.twist.linear.x = x(3);
+        estimated_odom.twist.twist.linear.y = x(4);
+        estimated_odom.twist.twist.linear.z = 0.0;
+    
+    
         estimated_odom_pub_->publish(estimated_odom);
     }
+    
 };
 
 int main(int argc, char* argv[]) {
