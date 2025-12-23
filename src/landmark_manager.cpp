@@ -27,54 +27,67 @@
  * 5. Return true if successful, false otherwise
  */
 bool LandmarkManager::loadFromCSV(const std::string& csv_path) {
-    // STUDENT IMPLEMENTATION STARTS HERE
-    // ========================================================================
-    
     std::ifstream file(csv_path);
     if (!file.is_open()) {
         std::cerr << "Failed to open landmark file: " << csv_path << std::endl;
         return false;
     }
-    
+
     landmarks_.clear();
+
+    auto trim = [](std::string &s) {
+        const char* ws = " \t\r\n";
+        s.erase(0, s.find_first_not_of(ws));
+        s.erase(s.find_last_not_of(ws) + 1);
+    };
+
     std::string line;
-   
     int line_num = 0;
+
     while (std::getline(file, line)) {
- 
-        line_num++;
-        if (line.empty() || line[0] == '#') {
+        ++line_num;
+
+        trim(line);
+        if (line.empty() || line[0] == '#') continue;
+
+        std::stringstream ss(line);
+        std::string tok_id, tok_x, tok_y;
+
+        if (!std::getline(ss, tok_id, ',') ||
+            !std::getline(ss, tok_x, ',')  ||
+            !std::getline(ss, tok_y, ',')) {
+            std::cerr << "Parse error at line " << line_num
+                      << ": expected format id,x,y but got: " << line << std::endl;
+            continue;
+            }
+
+        trim(tok_id);
+        trim(tok_x);
+        trim(tok_y);
+
+        try {
+            int id = std::stoi(tok_id);
+            double x = std::stod(tok_x);
+            double y = std::stod(tok_y);
+
+            landmarks_[id] = {x, y};
+        } catch (const std::exception& e) {
+            std::cerr << "Parse error at line " << line_num
+                      << ": " << e.what() << " line=" << line << std::endl;
             continue;
         }
-
-        std::pair<double, double> coornidates;
-        int id;
-        std::stringstream ss(line);
-        std::string token;
-        
-        try {
-        std::getline(ss, token, ',');
-        id = std::stoi(token);
-        coornidates.first = std::stod(token);
-        coornidates.second = std::stod(token);
-        } catch (const std::exception& e) {
-            std::cerr << "Parse error at line " << line_num << ": " << e.what() << std::endl;
-        }
-        landmarks_[id] = coornidates;
-        
     }
-    
-    file.close();
-    
+
     if (landmarks_.empty()) {
         std::cerr << "Warning: No landmarks loaded from " << csv_path << std::endl;
         return false;
     }
-    
 
-    std::cout << "Loaded " << landmarks_.size() << " landmarks from " << csv_path << std::endl;
+    std::cout << "Loaded " << landmarks_.size()
+              << " landmarks from " << csv_path << std::endl;
     return true;
 }
+
 
 // ============================================================================
 // LANDMARK QUERIES

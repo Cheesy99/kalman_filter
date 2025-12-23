@@ -21,7 +21,7 @@ def generate_launch_description():
     pkg_dir = get_package_share_directory('kalman_positioning')
     
     # Default landmarks CSV path
-    landmarks_csv_default = os.path.join(pkg_dir, 'data/landmarks.csv')
+    landmarks_csv_default = os.path.join(pkg_dir, 'landmarks.csv')
     
     # Launch arguments with descriptions
     landmarks_csv_arg = DeclareLaunchArgument(
