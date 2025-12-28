@@ -230,7 +230,6 @@ void UKF::predict(double dt, double dx, double dy, double dtheta) {
     x_ = x_pred;
     P_ = P_pred;
 
-    std::cout << "UKF Predict: " << std::endl;
 }
 
 // ============================================================================
@@ -307,9 +306,7 @@ void UKF::update(const std::vector<std::tuple<int, double, double, double>>& lan
         // 7) Covariance update
         P_ = P_ - K * S * K.transpose();
     }
-  
 
-    std::cout << "UKF Update: TODO - Implement measurement update step" << std::endl;
 }
 
 // ============================================================================
