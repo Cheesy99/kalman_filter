@@ -154,10 +154,16 @@ private:
     
         // First message: init timestamp only
         if (first_odom_) {
-            last_odom_time_ = current_time;
-            first_odom_ = false;
-            return;
-        }
+    last_odom_time_ = current_time;
+    first_odom_ = false;
+
+    // INITIALIZE STATE FROM ODOMETRY
+    x_init_from_odom(msg);
+
+    publishEstimatedOdometry(msg->header.stamp);
+    return;
+}
+
     
         double dt = (current_time - last_odom_time_).seconds();
         last_odom_time_ = current_time;
@@ -179,6 +185,21 @@ private:
         publishEstimatedOdometry(msg->header.stamp);
     }
     
+
+    void x_init_from_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    Eigen::VectorXd x0 = ukf_->getState();
+
+    x0(0) = msg->pose.pose.position.x;
+    x0(1) = msg->pose.pose.position.y;
+    x0(2) = quaternionToYaw(msg->pose.pose.orientation);
+    x0(3) = msg->twist.twist.linear.x;
+    x0(4) = msg->twist.twist.linear.y;
+
+    // Directly overwrite state (acceptable for initialization)
+    ukf_->setState(x0);
+}
+
+
     /**
      * @brief Callback for landmark observations
      * 

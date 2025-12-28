@@ -25,6 +25,9 @@ public:
      */
     void predict(double dt, double dx, double dy, double dtheta);
     
+    void setState(const Eigen::VectorXd& x) { x_ = x; }
+
+
     /**
      * @brief Update step with landmark observations
      * @param landmark_observations Vector of {id, x, y, noise_cov}
