@@ -213,19 +213,24 @@ void UKF::predict(double dt, double dx, double dy, double dtheta) {
   for (int i = 0; i < n_sig; i++) {
     sigma_points_pred[i] = processModel(sigma_points[i], dt, dx, dy, dtheta);
 
-    x_pred += Wm_[i] * sigma_points_pred[i];
+    x_pred(0) += Wm_[i] * sigma_points_pred[i](0);
+    x_pred(1) += Wm_[i] * sigma_points_pred[i](1);
+    x_pred(3) += Wm_[i] * sigma_points_pred[i](3);
+    x_pred(4) += Wm_[i] * sigma_points_pred[i](4);
 
+    // Accumulate for angle
     double theta_p = sigma_points_pred[i](2);
     cos_sum += Wm_[i] * std::cos(theta_p);
     sin_sum += Wm_[i] * std::sin(theta_p);
-
-    Eigen::VectorXd diff = sigma_points_pred[i] - x_pred;
-    diff(2) = normalizeAngle(diff(2));
-    P_pred += Wc_[i] * diff * diff.transpose();
   }
 
   x_pred(2) = std::atan2(sin_sum, cos_sum);
 
+  for (int i = 0; i < n_sig; i++) {
+    Eigen::VectorXd diff = sigma_points_pred[i] - x_pred;
+    diff(2) = normalizeAngle(diff(2));
+    P_pred += Wc_[i] * diff * diff.transpose();
+  }
   P_pred += Q_;
   x_ = x_pred;
   P_ = P_pred;
@@ -249,6 +254,7 @@ void UKF::predict(double dt, double dx, double dy, double dtheta) {
  */
 void UKF::update(const std::vector<std::tuple<int, double, double, double>>
                      &landmark_observations) {
+
   if (landmark_observations.empty()) {
     return;
   }
@@ -295,27 +301,26 @@ void UKF::update(const std::vector<std::tuple<int, double, double, double>>
     // Add measurement noise
     S += R_;
 
-    // 4) Kalman gain
-    if (S.determinant() < 1e-9) {
+    Eigen::LDLT<Eigen::Matrix2d> ldlt(S);
+    if (ldlt.info() != Eigen::Success) {
       continue;
     }
-    Eigen::MatrixXd K = Tc * S.inverse(); // (nx_ x 2)
 
-    // 5) Innovation (measurement - predicted measurement)
-    Eigen::Vector2d z_meas;
-    z_meas << meas_x, meas_y;
-
+    Eigen::Vector2d z_meas(meas_x, meas_y);
     Eigen::Vector2d y = z_meas - z_pred;
 
-    double maha = y.transpose() * S.inverse() * y;
+    // Mahalanobis distance (NO inverse)
+    double maha = y.transpose() * ldlt.solve(y);
     if (maha > 9.21) {
-      continue; // reject outlier measurement
+      continue;
     }
-    // 6) State update
-    x_ = x_ + K * y;
-    x_(2) = normalizeAngle(x_(2)); // keep theta in a sane range
 
-    // 7) Covariance update
+    // Kalman gain (NO inverse)
+    Eigen::Matrix2d S_inv = ldlt.solve(Eigen::Matrix2d::Identity());
+    Eigen::MatrixXd K = Tc * S_inv;
+
+    x_ = x_ + K * y;
+    x_(2) = normalizeAngle(x_(2));
     P_ = P_ - K * S * K.transpose();
   }
 }
