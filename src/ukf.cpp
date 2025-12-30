@@ -2,41 +2,14 @@
 #include <iostream>
 #include <map>
 
-/**
- * STUDENT ASSIGNMENT: Unscented Kalman Filter Implementation
- *
- * This file contains placeholder implementations for the UKF class methods.
- * Students should implement each method according to the UKF algorithm.
- *
- * Reference: Wan, E. A., & Van Der Merwe, R. (2000).
- * "The Unscented Kalman Filter for Nonlinear Estimation"
- */
-
-// ============================================================================
-// CONSTRUCTOR
-// ============================================================================
-
-/**
- * @brief Initialize the Unscented Kalman Filter
- *
- * STUDENT TODO:
- * 1. Initialize filter parameters (alpha, beta, kappa, lambda)
- * 2. Initialize state vector x_ with zeros
- * 3. Initialize state covariance matrix P_
- * 4. Set process noise covariance Q_
- * 5. Set measurement noise covariance R_
- * 6. Calculate sigma point weights for mean and covariance
- */
 UKF::UKF(double process_noise_xy, double process_noise_theta,
          double measurement_noise_xy, int num_landmarks)
     : nx_(5), nz_(2) {
 
-  // STUDENT IMPLEMENTATION STARTS HERE
-  // ========================================================================
   this->lambda_ = ALPHA * ALPHA * (nx_ + KAPPA) - nx_;
   this->gamma_ = std::sqrt(nx_ + lambda_);
   this->x_ = Eigen::VectorXd::Zero(nx_);
-  this->P_ = Eigen::MatrixXd::Identity(nx_, nx_);
+  this->P_ = Eigen::MatrixXd::Identity(nx_, nx_) * 1.0;
 
   this->Q_ = Eigen::MatrixXd::Zero(nx_, nx_);
   this->Q_(0, 0) = process_noise_xy;
@@ -45,133 +18,79 @@ UKF::UKF(double process_noise_xy, double process_noise_theta,
 
   this->R_ = measurement_noise_xy * Eigen::MatrixXd::Identity(nz_, nz_);
 
-  // ============================================================================
-  // TODO: Really understand the math below why we use these values hwo the work
-  // ============================================================================
   int numberOfSigmaPoints = 2 * nx_ + 1;
   this->Wm_.resize(numberOfSigmaPoints);
   this->Wc_.resize(numberOfSigmaPoints);
 
   double c = nx_ + lambda_;
-
   Wm_[0] = lambda_ / c;
   Wc_[0] = lambda_ / c + (1.0 - ALPHA * ALPHA + BETA);
 
   double wi = 1.0 / (2.0 * c);
-
   for (int i = 1; i < numberOfSigmaPoints; ++i) {
     Wm_[i] = wi;
     Wc_[i] = wi;
   }
 }
 
-// ============================================================================
-// SIGMA POINT GENERATION
-// ============================================================================
-
-/**
- * @brief Generate sigma points from mean and covariance
- *
- * STUDENT TODO:
- * 1. Start with the mean as the first sigma point
- * 2. Compute Cholesky decomposition of covariance
- * 3. Generate 2*n symmetric sigma points around the mean
- */
 std::vector<Eigen::VectorXd>
 UKF::generateSigmaPoints(const Eigen::VectorXd &mean,
                          const Eigen::MatrixXd &cov) {
-  // STUDENT IMPLEMENTATION STARTS HERE
-  // ========================================================================
-
   std::vector<Eigen::VectorXd> sigma_points;
   sigma_points.resize(2 * nx_ + 1);
   sigma_points[0] = mean;
-  Eigen::LLT<Eigen::MatrixXd> llt(cov);
+
+  Eigen::MatrixXd cov_sym = 0.5 * (cov + cov.transpose());
+  Eigen::LLT<Eigen::MatrixXd> llt(cov_sym);
+
+  if (llt.info() != Eigen::Success) {
+    Eigen::MatrixXd cov_jitter = cov_sym;
+    cov_jitter.diagonal().array() += 1e-6;
+    llt.compute(cov_jitter);
+  }
+
   Eigen::MatrixXd L = llt.matrixL();
   Eigen::MatrixXd s = gamma_ * L;
 
   for (int i = 0; i < nx_; i++) {
-    int k_pos = 1 + i;
-    int k_neg = 1 + i + nx_;
-
-    sigma_points[k_pos] = mean + s.col(i);
-    sigma_points[k_neg] = mean - s.col(i);
+    sigma_points[1 + i] = mean + s.col(i);
+    sigma_points[1 + i + nx_] = mean - s.col(i);
   }
-
   return sigma_points;
 }
 
-// ============================================================================
-// PROCESS MODEL
-// ============================================================================
-
-/**
- * @brief Apply motion model to a state vector
- *
- * STUDENT TODO:
- * 1. Updates position: x' = x + dx, y' = y + dy
- * 2. Updates orientation: theta' = theta + dtheta (normalized)
- * 3. Updates velocities: vx' = dx/dt, vy' = dy/dt
- */
 Eigen::VectorXd UKF::processModel(const Eigen::VectorXd &state, double dt,
                                   double dx, double dy, double dtheta) {
-  // STUDENT IMPLEMENTATION STARTS HERE
-  // =======================================================================
   Eigen::VectorXd new_state = state;
-  new_state(0) = new_state(0) + dx;
-  new_state(1) = new_state(1) + dy;
+  new_state(0) += dx;
+  new_state(1) += dy;
   new_state(2) = this->normalizeAngle(new_state(2) + dtheta);
-  if (dt != 0) {
+
+  if (dt > 1e-6) {
     new_state(3) = dx / dt;
     new_state(4) = dy / dt;
   }
-
   return new_state;
 }
 
-// ============================================================================
-// MEASUREMENT MODEL
-// ============================================================================
-
-/**
- * @brief Predict measurement given current state and landmark
- *
- * STUDENT TODO:
- * 1. Calculate relative position: landmark - robot position
- * 2. Transform to robot frame using robot orientation
- * 3. Return relative position in robot frame
- */
 Eigen::Vector2d UKF::measurementModel(const Eigen::VectorXd &state,
                                       int landmark_id) {
-  // STUDENT IMPLEMENTATION STARTS HERE
-  // ========================================================================
-
-  if (landmarks_.find(landmark_id) == landmarks_.end()) {
+  auto it = landmarks_.find(landmark_id);
+  if (it == landmarks_.end())
     return Eigen::Vector2d::Zero();
-  }
 
-  std::pair<double, double> landmark = landmarks_.at(landmark_id);
-  double delta_x = landmark.first - state(0);
-  double delta_y = landmark.second - state(1);
+  const double dx = it->second.first - state(0);
+  const double dy = it->second.second - state(1);
+  const double th = state(2);
 
-  Eigen::Vector2d result(delta_x, delta_y);
+  const double c = std::cos(th);
+  const double s = std::sin(th);
 
-  double theta = normalizeAngle(state(2));
-
-  Eigen::Matrix2d rotationMatrix;
-  rotationMatrix(0, 0) = std::cos(theta);
-  rotationMatrix(0, 1) = -std::sin(theta);
-  rotationMatrix(1, 0) = std::sin(theta);
-  rotationMatrix(1, 1) = std::cos(theta);
-
-  result = rotationMatrix.transpose() * result;
-
-  return result;
+  Eigen::Vector2d z;
+  z(0) = c * dx + s * dy;
+  z(1) = -s * dx + c * dy;
+  return z;
 }
-
-// ============================================================================
-// ANGLE NORMALIZATION
-// ============================================================================
 
 double UKF::normalizeAngle(double angle) {
   while (angle > M_PI)
@@ -181,47 +100,24 @@ double UKF::normalizeAngle(double angle) {
   return angle;
 }
 
-// ============================================================================
-// PREDICTION STEP
-// ============================================================================
-
-/**
- * @brief Kalman Filter Prediction Step (Time Update)
- *
- * STUDENT TODO:
- * 1. Generate sigma points from current state and covariance
- * 2. Propagate each sigma point through motion model
- * 3. Calculate mean and covariance of predicted sigma points
- * 4. Add process noise
- * 5. Update state and covariance estimates
- */
 void UKF::predict(double dt, double dx, double dy, double dtheta) {
-  // STUDENT IMPLEMENTATION STARTS HERE
-  // ========================================================================
-
   auto sigma_points = generateSigmaPoints(x_, P_);
   int n_sig = static_cast<int>(sigma_points.size());
-  std::vector<Eigen::VectorXd> sigma_points_pred;
 
+  std::vector<Eigen::VectorXd> sigma_points_pred(n_sig);
   Eigen::VectorXd x_pred = Eigen::VectorXd::Zero(nx_);
   Eigen::MatrixXd P_pred = Eigen::MatrixXd::Zero(nx_, nx_);
 
-  double cos_sum = 0.0;
-  double sin_sum = 0.0;
-  sigma_points_pred.resize(sigma_points.size());
+  double cos_sum = 0.0, sin_sum = 0.0;
 
   for (int i = 0; i < n_sig; i++) {
     sigma_points_pred[i] = processModel(sigma_points[i], dt, dx, dy, dtheta);
-
     x_pred(0) += Wm_[i] * sigma_points_pred[i](0);
     x_pred(1) += Wm_[i] * sigma_points_pred[i](1);
     x_pred(3) += Wm_[i] * sigma_points_pred[i](3);
     x_pred(4) += Wm_[i] * sigma_points_pred[i](4);
-
-    // Accumulate for angle
-    double theta_p = sigma_points_pred[i](2);
-    cos_sum += Wm_[i] * std::cos(theta_p);
-    sin_sum += Wm_[i] * std::sin(theta_p);
+    cos_sum += Wm_[i] * std::cos(sigma_points_pred[i](2));
+    sin_sum += Wm_[i] * std::sin(sigma_points_pred[i](2));
   }
 
   x_pred(2) = std::atan2(sin_sum, cos_sum);
@@ -231,103 +127,56 @@ void UKF::predict(double dt, double dx, double dy, double dtheta) {
     diff(2) = normalizeAngle(diff(2));
     P_pred += Wc_[i] * diff * diff.transpose();
   }
-  P_pred += Q_;
+  P_ = P_pred + Q_;
   x_ = x_pred;
-  P_ = P_pred;
 }
 
-// ============================================================================
-// UPDATE STEP
-// ============================================================================
-
-/**
- * @brief Kalman Filter Update Step (Measurement Update)
- *
- * STUDENT TODO:
- * 1. Generate sigma points
- * 2. Transform through measurement model
- * 3. Calculate predicted measurement mean
- * 4. Calculate measurement and cross-covariance
- * 5. Compute Kalman gain
- * 6. Update state with innovation
- * 7. Update covariance
- */
 void UKF::update(const std::vector<std::tuple<int, double, double, double>>
                      &landmark_observations) {
-
-  if (landmark_observations.empty()) {
-    return;
-  }
-
-  // STUDENT IMPLEMENTATION STARTS HERE
-  // ========================================================================
-
-  // Process each landmark observation sequentially
   for (const auto &obs : landmark_observations) {
     auto [id, meas_x, meas_y, extra] = obs;
-    if (!hasLandmark(id)) {
-      continue; // skip this observation entirely
-    }
+    if (!hasLandmark(id))
+      continue;
 
-    // 1) Generate sigma points from current state and covariance
     auto sigma_points = generateSigmaPoints(x_, P_);
     int n_sig = static_cast<int>(sigma_points.size());
 
-    // 2) Transform sigma points through measurement model
     std::vector<Eigen::Vector2d> Z_sigma(n_sig);
     Eigen::Vector2d z_pred = Eigen::Vector2d::Zero();
 
     for (int i = 0; i < n_sig; ++i) {
-
       Z_sigma[i] = measurementModel(sigma_points[i], id);
-
-      z_pred += Wm_[i] * Z_sigma[i]; // predicted measurement mean
+      z_pred += Wm_[i] * Z_sigma[i];
     }
 
-    // 3) Measurement covariance S and cross-covariance Tc
     Eigen::Matrix2d S = Eigen::Matrix2d::Zero();
-    Eigen::MatrixXd Tc = Eigen::MatrixXd::Zero(nx_, nz_); // nx_ x 2
+    Eigen::MatrixXd Tc = Eigen::MatrixXd::Zero(nx_, nz_);
 
     for (int i = 0; i < n_sig; ++i) {
       Eigen::Vector2d z_diff = Z_sigma[i] - z_pred;
-
       Eigen::VectorXd x_diff = sigma_points[i] - x_;
-      x_diff(2) = normalizeAngle(x_diff(2)); // handle angle in state
+      x_diff(2) = normalizeAngle(x_diff(2));
 
       S += Wc_[i] * z_diff * z_diff.transpose();
       Tc += Wc_[i] * x_diff * z_diff.transpose();
     }
 
-    // Add measurement noise
     S += R_;
-
     Eigen::LDLT<Eigen::Matrix2d> ldlt(S);
-    if (ldlt.info() != Eigen::Success) {
+    if (ldlt.info() != Eigen::Success)
       continue;
-    }
 
     Eigen::Vector2d z_meas(meas_x, meas_y);
     Eigen::Vector2d y = z_meas - z_pred;
-
-    // Mahalanobis distance (NO inverse)
-    double maha = y.transpose() * ldlt.solve(y);
-    if (maha > 9.21) {
+    if (y.transpose() * ldlt.solve(y) > 9.21)
       continue;
-    }
 
-    // Kalman gain (NO inverse)
-    Eigen::Matrix2d S_inv = ldlt.solve(Eigen::Matrix2d::Identity());
-    Eigen::MatrixXd K = Tc * S_inv;
-
-    x_ = x_ + K * y;
+    Eigen::MatrixXd K = Tc * ldlt.solve(Eigen::Matrix2d::Identity());
+    x_ += K * y;
     x_(2) = normalizeAngle(x_(2));
-    P_ = P_ - K * S * K.transpose();
+    P_ -= K * S * K.transpose();
   }
 }
-
-// ============================================================================
-// LANDMARK MANAGEMENT
-// ============================================================================
 
 void UKF::setLandmarks(
     const std::map<int, std::pair<double, double>> &landmarks) {
