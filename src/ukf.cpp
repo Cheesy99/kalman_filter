@@ -2,6 +2,17 @@
 #include <iostream>
 #include <map>
 
+/**
+ * @brief Initializes the Unscented Kalman Filter.
+ *
+ * Sets up the state covariance (P), process noise (Q), measurement noise (R),
+ * and calculates the sigma point weights (Wm, Wc) based on UKF hyperparameters.
+ *
+ * @param process_noise_xy Standard deviation of position noise (meters).
+ * @param process_noise_theta Standard deviation of heading noise (radians).
+ * @param measurement_noise_xy Standard deviation of measurement noise (meters).
+ * @param num_landmarks Expected number of landmarks (currently reserved).
+ */
 UKF::UKF(double process_noise_xy, double process_noise_theta,
          double measurement_noise_xy, int num_landmarks)
     : nx_(5), nz_(2) {
@@ -33,6 +44,18 @@ UKF::UKF(double process_noise_xy, double process_noise_theta,
   }
 }
 
+/**
+ * @brief Generates sigma points around the current mean using the covariance
+ * matrix.
+ *
+ * This method performs a Cholesky decomposition (LLT). If the covariance matrix
+ * is not positive definite due to numerical error, a small "jitter" is added to
+ * the diagonal.
+ *
+ * @param mean Current state mean.
+ * @param cov Current state covariance.
+ * @return std::vector<Eigen::VectorXd> Vector of 2*nx+1 sigma points.
+ */
 std::vector<Eigen::VectorXd>
 UKF::generateSigmaPoints(const Eigen::VectorXd &mean,
                          const Eigen::MatrixXd &cov) {
@@ -43,6 +66,7 @@ UKF::generateSigmaPoints(const Eigen::VectorXd &mean,
   Eigen::MatrixXd cov_sym = 0.5 * (cov + cov.transpose());
   Eigen::LLT<Eigen::MatrixXd> llt(cov_sym);
 
+  // Fallback: Add jitter if decomposition fails (matrix not positive definite)
   if (llt.info() != Eigen::Success) {
     Eigen::MatrixXd cov_jitter = cov_sym;
     cov_jitter.diagonal().array() += 1e-6;
@@ -59,6 +83,16 @@ UKF::generateSigmaPoints(const Eigen::VectorXd &mean,
   return sigma_points;
 }
 
+/**
+ * @brief Process Model (Motion Model).
+ *
+ * Propagates a single state vector forward in time based on odometry inputs.
+ *
+ * @param state Initial state.
+ * @param dt Time delta.
+ * @param dx, dy, dtheta Odometry deltas.
+ * @return Eigen::VectorXd Predicted state.
+ */
 Eigen::VectorXd UKF::processModel(const Eigen::VectorXd &state, double dt,
                                   double dx, double dy, double dtheta) {
   Eigen::VectorXd new_state = state;
@@ -73,6 +107,16 @@ Eigen::VectorXd UKF::processModel(const Eigen::VectorXd &state, double dt,
   return new_state;
 }
 
+/**
+ * @brief Measurement Model.
+ *
+ * Transforms a state vector into expected landmark observations (relative x, y)
+ * in the robot's local frame.
+ *
+ * @param state The state vector to transform.
+ * @param landmark_id The ID of the landmark being observed.
+ * @return Eigen::Vector2d Expected measurement [x_rel, y_rel].
+ */
 Eigen::Vector2d UKF::measurementModel(const Eigen::VectorXd &state,
                                       int landmark_id) {
   auto it = landmarks_.find(landmark_id);
@@ -92,6 +136,9 @@ Eigen::Vector2d UKF::measurementModel(const Eigen::VectorXd &state,
   return z;
 }
 
+/**
+ * @brief Normalizes an angle to be within the interval [-PI, PI].
+ */
 double UKF::normalizeAngle(double angle) {
   while (angle > M_PI)
     angle -= 2.0 * M_PI;
@@ -100,6 +147,12 @@ double UKF::normalizeAngle(double angle) {
   return angle;
 }
 
+/**
+ * @brief Predicts the next state using the Unscented Transform.
+ *
+ * Generates sigma points, propagates them through the process model,
+ * and recovers the predicted mean and covariance.
+ */
 void UKF::predict(double dt, double dx, double dy, double dtheta) {
   auto sigma_points = generateSigmaPoints(x_, P_);
   int n_sig = static_cast<int>(sigma_points.size());
@@ -116,6 +169,8 @@ void UKF::predict(double dt, double dx, double dy, double dtheta) {
     x_pred(1) += Wm_[i] * sigma_points_pred[i](1);
     x_pred(3) += Wm_[i] * sigma_points_pred[i](3);
     x_pred(4) += Wm_[i] * sigma_points_pred[i](4);
+
+    // Compute angular mean using vector sums to avoid wrap-around issues
     cos_sum += Wm_[i] * std::cos(sigma_points_pred[i](2));
     sin_sum += Wm_[i] * std::sin(sigma_points_pred[i](2));
   }
@@ -131,6 +186,14 @@ void UKF::predict(double dt, double dx, double dy, double dtheta) {
   x_ = x_pred;
 }
 
+/**
+ * @brief Updates the state based on landmark observations.
+ *
+ * Performs an outlier rejection test (Mahalanobis distance > 9.21) before
+ * update.
+ *
+ * @param landmark_observations Tuple of <id, meas_x, meas_y, extra>.
+ */
 void UKF::update(const std::vector<std::tuple<int, double, double, double>>
                      &landmark_observations) {
   for (const auto &obs : landmark_observations) {
@@ -168,6 +231,8 @@ void UKF::update(const std::vector<std::tuple<int, double, double, double>>
 
     Eigen::Vector2d z_meas(meas_x, meas_y);
     Eigen::Vector2d y = z_meas - z_pred;
+
+    // Chi-square test (99% confidence, 2 DOF) to reject outliers
     if (y.transpose() * ldlt.solve(y) > 9.21)
       continue;
 
@@ -178,11 +243,17 @@ void UKF::update(const std::vector<std::tuple<int, double, double, double>>
   }
 }
 
+/**
+ * @brief Sets the global map of landmarks.
+ */
 void UKF::setLandmarks(
     const std::map<int, std::pair<double, double>> &landmarks) {
   landmarks_ = landmarks;
 }
 
+/**
+ * @brief Checks if a landmark ID exists in the map.
+ */
 bool UKF::hasLandmark(int id) const {
   return landmarks_.find(id) != landmarks_.end();
 }
